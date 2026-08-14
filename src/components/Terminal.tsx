@@ -1,4 +1,4 @@
-import { COMMIT, DIFFSTAT, fullMessage } from "../data";
+import { COMMIT, CONVENTION, DIFFSTAT, fullMessage } from "../data";
 import { useCopy, useTypewriter } from "../hooks";
 
 export function CopyButton({
@@ -102,6 +102,15 @@ export function Terminal() {
             done ? "translate-y-0 opacity-100" : "translate-y-3 opacity-0"
           }`}
         >
+          <p className="mb-5 inline-flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 rounded border border-lime/30 bg-lime/5 px-3 py-1.5 font-mono text-[11px] text-lime">
+            <span aria-hidden>✓</span> commit-msg hook passed
+            <span className="text-lime/50">·</span>
+            <span className="text-lime/80">subject matches</span>
+            <code className="rounded bg-lime/10 px-1.5 py-0.5 text-[10.5px]">
+              {CONVENTION}
+            </code>
+          </p>
+
           <pre className="whitespace-pre-wrap font-mono text-[12.5px] leading-relaxed text-dim">
             {COMMIT.body}
           </pre>

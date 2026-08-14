@@ -1,3 +1,5 @@
+export const CONVENTION = "<type>: <what changed> - <why it matters>";
+
 export const COMMIT = {
   sha: "a41f9c2",
   branch: "feat/live-dashboard",
@@ -5,7 +7,7 @@ export const COMMIT = {
   author: "Ava Chen <ava@northstar.dev>",
   date: "Fri Feb 20 17:42:08 2026 +0100",
   subject:
-    "feat(dashboard): add live deflection metrics and rewire UI event handlers",
+    "feat: live metrics dashboard, fixed wiring - support impact now visible",
   body: `Render the agent dashboard from live state: a 7-day deflected-vs-escalated
 trend chart and a rolling 24-point sparkline as inline SVG, a donut gauge
 for deflection rate, category-volume bars, and a channel-performance
@@ -93,7 +95,7 @@ export const SIGNALS: Signal[] = [
   {
     tag: "hint",
     title: "The commit type is hiding in the comments",
-    body: "The /* WIRING (fixed) */ banner is the strongest signal in the diff: part of this change repairs handler binding — almost certainly after a DOM refactor that broke the $() lookups. That's why the subject leads with “rewire” and a fix-flavoured alternate sits below.",
+    body: "The /* WIRING (fixed) */ banner is the strongest signal in the diff: part of this change repairs handler binding — almost certainly after a DOM refactor that broke the $() lookups. That's why the subject carries “fixed wiring” and a fix-flavoured alternate sits below.",
   },
   {
     tag: "note",
@@ -128,9 +130,9 @@ export const ALTERNATES: AltStyle[] = [
   {
     id: "oneline",
     label: "One-liner",
-    hint: "For teams that keep history shallow and subjects under 72 chars.",
+    hint: "Squash-friendly. Subject carries the why in one breath.",
     lines: [
-      "feat: live deflection dashboard with simulated feed and repaired event wiring",
+      "feat: live deflection dashboard - watch support impact in real time",
     ],
   },
   {
@@ -138,7 +140,7 @@ export const ALTERNATES: AltStyle[] = [
     label: "Fix-flavoured",
     hint: "Use this if the wiring repair — not the dashboard — is why the change exists.",
     lines: [
-      "fix(ui): rebind tab, chat, and self-serve handlers; guard dashboard renders",
+      "fix: rebind dashboard handlers - live feed and charts render again",
       "",
       "Wiring is rebuilt around querySelectorAll with null-safe pane activation,",
       "and renderMetrics() is re-invoked on tab focus so charts never show stale",
@@ -148,8 +150,10 @@ export const ALTERNATES: AltStyle[] = [
   {
     id: "release",
     label: "Release note",
-    hint: "Customer-facing wording, if this demo ships to stakeholders.",
+    hint: "Convention-compliant subject up top, stakeholder bullets below.",
     lines: [
+      "feat: agent dashboard refresh - deflection rate updates live every 5s",
+      "",
       "- New live dashboard: 7-day trend, rolling sparkline, deflection donut",
       "- Simulated inbound feed every 5s with pause/resume control",
       "- Auto-tagging ticket simulator for the agent triage queue",

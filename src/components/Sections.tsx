@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import {
   ALTERNATES,
   MODULES,
@@ -40,7 +40,7 @@ function SectionHead({
 }: {
   kicker: string;
   title: string;
-  blurb: string;
+  blurb: ReactNode;
 }) {
   return (
     <Reveal className="max-w-2xl">
@@ -189,7 +189,17 @@ export function Alternates() {
       <SectionHead
         kicker="// 03 — pick your flavour"
         title="Three alternates, same diff"
-        blurb="House style varies. Same analysis, three registers — from a squash-friendly one-liner to stakeholder release notes."
+        blurb={
+          <>
+            House style varies. Same analysis, three registers — from a
+            squash-friendly one-liner to stakeholder release notes. Every
+            subject still obeys the house rule:{" "}
+            <code className="rounded bg-panel px-1.5 py-0.5 font-mono text-[13px] text-amber">
+              {"<type>: <what changed> - <why it matters>"}
+            </code>
+            . Never <em>wip</em>, never <em>updates</em>.
+          </>
+        }
       />
 
       <Reveal delay={100} className="mt-8">
