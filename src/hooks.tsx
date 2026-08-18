@@ -6,26 +6,6 @@ import {
   type ReactNode,
 } from "react";
 
-/* ---------- typewriter ---------- */
-export function useTypewriter(text: string, speed = 26, startDelay = 500) {
-  const [count, setCount] = useState(0);
-  const [started, setStarted] = useState(false);
-
-  useEffect(() => {
-    const t = window.setTimeout(() => setStarted(true), startDelay);
-    return () => window.clearTimeout(t);
-  }, [startDelay]);
-
-  useEffect(() => {
-    if (!started) return;
-    if (count >= text.length) return;
-    const t = window.setTimeout(() => setCount((c) => c + 1), speed);
-    return () => window.clearTimeout(t);
-  }, [started, count, text.length, speed]);
-
-  return { typed: text.slice(0, count), done: count >= text.length && started };
-}
-
 /* ---------- scroll reveal wrapper ---------- */
 export function Reveal({
   children,
@@ -44,6 +24,10 @@ export function Reveal({
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      setInView(true);
+      return;
+    }
     const io = new IntersectionObserver(
       (entries) => {
         entries.forEach((e) => {
@@ -96,7 +80,6 @@ export function useCopy(resetAfter = 1800) {
       /* clipboard unavailable — stay silent */
     }
   };
-
   useEffect(() => {
     return () => {
       if (timer.current) window.clearTimeout(timer.current);
@@ -104,4 +87,42 @@ export function useCopy(resetAfter = 1800) {
   }, []);
 
   return { copied, copy };
+}
+
+/* ---------- count-up on view ---------- */
+export function useCountUp(target: number, decimals = 0, duration = 1400) {
+  const ref = useRef<HTMLSpanElement | null>(null);
+  const [val, setVal] = useState(0);
+  const started = useRef(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      setVal(target);
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((e) => {
+          if (!e.isIntersecting || started.current) return;
+          started.current = true;
+          io.disconnect();
+          const t0 = performance.now();
+          const tick = (t: number) => {
+            const p = Math.min(1, (t - t0) / duration);
+            const eased = 1 - Math.pow(1 - p, 3);
+            setVal(target * eased);
+            if (p < 1) requestAnimationFrame(tick);
+          };
+          requestAnimationFrame(tick);
+        });
+      },
+      { threshold: 0.4 }
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [target, duration]);
+
+  return { ref, display: val.toFixed(decimals) };
 }

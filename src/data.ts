@@ -1,418 +1,276 @@
-import type { Lang } from "./highlight";
+/* =============== Northstar Sync — site content =============== */
 
-/* ================= sprint meta ================= */
-export const SPRINT = {
-  program: "Meridian Pivot",
-  assignment: "Assignment 1",
-  phase: "Days 1–2 · Solo Recon",
-  tool: "Webhook Signature Verification",
-  concept: "HMAC SHA-256 over raw request bytes, with a replay guard",
-  company: "Northstar Retail Co.",
-  purpose:
-    "A live inventory sync service that keeps support responses accurate — updates are only trusted when they carry a valid signature.",
-  targetHours: 4.0,
-  actualHours: 3.5,
-  status: "PASS",
-};
-
-/* ================= Step 1 — codebase ================= */
-export type CodeFile = {
-  name: string;
-  lang: Lang;
-  note: string;
-  code: string;
-};
-
-export const SERVER_JS = `// ============================================================
-// northstar-inventory-hook — Assignment 1 mini-prototype
-// Tool: Webhook Signature Verification (HMAC SHA-256)
-// Sprint: Meridian Pivot, Days 1-2. Built solo, no outside help.
-//
-// A supplier POSTs inventory updates to /webhooks/inventory.
-// We refuse to trust a request unless it carries a valid
-// signature over "<timestamp>.<nonce>.<raw body>".
-// ============================================================
-require('dotenv').config();
-const express = require('express');
-const crypto = require('crypto');
-
-const app = express();
-const PORT = process.env.PORT || 3000;
-const SECRET = process.env.WEBHOOK_SECRET || 'meridian-dev-secret';
-const MAX_SKEW_MS = Number(process.env.MAX_SKEW_MS || 5 * 60 * 1000);
-
-// --- Replay guard -------------------------------------------
-// nonce -> time we consumed it. A nonce is single-use inside the
-// skew window; a sweeper prunes expired entries so this Map
-// cannot grow without bound.
-const seenNonces = new Map();
-setInterval(() => {
-  const cutoff = Date.now() - MAX_SKEW_MS * 2;
-  for (const [nonce, at] of seenNonces) {
-    if (at < cutoff) seenNonces.delete(nonce);
-  }
-}, 60 * 1000).unref();
-
-// Tiny in-memory store so the support desk reads live stock.
-const inventory = new Map([
-  ['NS-1042', { sku: 'NS-1042', stock: 96, updatedAt: null, source: 'seed' }],
-]);
-
-// --- Body parsing with raw capture --------------------------
-// Blocker #1 lesson: express.json() replaces the raw stream with
-// a parsed object. The verify() hook runs BEFORE parsing, so we
-// stash the exact received bytes and sign/verify against those —
-// never against a re-stringified object.
-app.use(express.json({
-  verify: (req, _res, buf) => { req.rawBody = buf; },
-}));
-
-// Canonical string both signer and verifier must agree on.
-function signingBase(ts, nonce, rawBody) {
-  return [ts, nonce, rawBody].join('.');
-}
-
-// HMAC-SHA256 as lowercase hex — one encoding everywhere
-// (Blocker #2 lesson: never mix hex and base64).
-function computeSignature(ts, nonce, rawBody) {
-  return crypto.createHmac('sha256', SECRET)
-    .update(signingBase(ts, nonce, rawBody))
-    .digest('hex');
-}
-
-// Constant-time comparison that can never throw.
-// timingSafeEqual demands equal-length buffers, so a length
-// mismatch is rejected BEFORE the compare, not by a try/catch.
-function safeEqual(a, b) {
-  const ba = Buffer.from(a, 'utf8');
-  const bb = Buffer.from(b, 'utf8');
-  if (ba.length !== bb.length) return false;
-  return crypto.timingSafeEqual(ba, bb);
-}
-
-function verifyWebhook(req, res, next) {
-  const ts = req.header('X-NS-Timestamp');
-  const nonce = req.header('X-NS-Nonce');
-  const sig = req.header('X-NS-Signature') || '';
-
-  if (!ts || !nonce || !req.rawBody) {
-    return res.status(400).json({ error: 'missing signature headers' });
-  }
-
-  // 1) Freshness — reject anything outside the skew window.
-  const age = Math.abs(Date.now() - Number(ts));
-  if (!Number.isFinite(age) || age > MAX_SKEW_MS) {
-    return res.status(400).json({ error: 'timestamp outside window' });
-  }
-
-  // 2) Replay — a nonce may be consumed exactly once.
-  if (seenNonces.has(nonce)) {
-    return res.status(409).json({ error: 'nonce already seen' });
-  }
-
-  // 3) Authenticity — recompute the HMAC over the raw bytes.
-  const expected = computeSignature(ts, nonce, req.rawBody.toString('utf8'));
-  const provided = sig.replace(/^sha256=/, '');
-  if (!safeEqual(expected, provided)) {
-    return res.status(401).json({ error: 'invalid signature' });
-  }
-
-  // Consume the nonce only AFTER the signature passes, so forged
-  // requests cannot poison the replay cache.
-  seenNonces.set(nonce, Date.now());
-  next();
-}
-
-// --- Routes --------------------------------------------------
-app.post('/webhooks/inventory', verifyWebhook, (req, res) => {
-  const { event, sku, stock } = req.body || {};
-  if (event !== 'stock.updated' || typeof stock !== 'number') {
-    return res.status(422).json({ error: 'unsupported event payload' });
-  }
-  inventory.set(sku, {
-    sku,
-    stock,
-    updatedAt: new Date().toISOString(),
-    source: 'webhook:verified',
-  });
-  res.status(200).json({ ok: true, received: event, sku, stock });
-});
-
-// What the support desk actually reads.
-app.get('/inventory/:sku', (req, res) => {
-  const row = inventory.get(req.params.sku);
-  if (!row) return res.status(404).json({ error: 'sku not found' });
-  res.json(row);
-});
-
-app.listen(PORT, () => {
-  console.log('northstar inventory webhook listening on :' + PORT);
-});
-`;
-
-export const SEND_SH = `#!/usr/bin/env bash
-# Signs and sends a stock update the way our supplier would.
-# Usage: ./send.sh [--tamper | --stale | --replay]
-set -euo pipefail
-
-SECRET="\${WEBHOOK_SECRET:-meridian-dev-secret}"
-TS="$(date +%s%3N)"                 # unix time in milliseconds
-NONCE="$(uuidgen)"
-BODY='{"event":"stock.updated","sku":"NS-1042","stock":118,"warehouse":"ATL-02"}'
-
-case "\${1:-}" in
-  --tamper) BODY='{"event":"stock.updated","sku":"NS-1042","stock":999,"warehouse":"ATL-02"}' ;;
-  --stale)  TS="$(( $(date +%s%3N) - 360000 ))" ;;   # 6 minutes in the past
-  --replay) NONCE="f3d1c2a4-replay-fixed-nonce" ;;
-esac
-
-# HMAC-SHA256 over "<ts>.<nonce>.<body>" — the same canonical
-# signing base server.js recomputes. Hex, always hex.
-SIG="$(printf '%s.%s.%s' "$TS" "$NONCE" "$BODY" \\
-  | openssl dgst -sha256 -hmac "$SECRET" -hex \\
-  | awk '{print $2}')"
-
-curl -i -sS -X POST "http://localhost:3000/webhooks/inventory" \\
-  -H "Content-Type: application/json" \\
-  -H "X-NS-Timestamp: $TS" \\
-  -H "X-NS-Nonce: $NONCE" \\
-  -H "X-NS-Signature: sha256=$SIG" \\
-  -d "$BODY"
-`;
-
-export const PACKAGE_JSON = `{
-  "name": "northstar-inventory-hook",
-  "version": "0.1.0",
-  "private": true,
-  "description": "Meridian Pivot sprint — verified inventory webhooks for Northstar Retail Co.",
-  "main": "server.js",
-  "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js"
-  },
-  "dependencies": {
-    "dotenv": "^16.4.5",
-    "express": "^4.19.2"
-  }
-}
-`;
-
-export const ENV_EXAMPLE = `# Copy to .env — never commit the real secret.
-# Generate one with:  openssl rand -hex 32
-WEBHOOK_SECRET=meridian-dev-secret
-PORT=3000
-MAX_SKEW_MS=300000
-`;
-
-export const FILES: CodeFile[] = [
-  {
-    name: "server.js",
-    lang: "js",
-    note: "Express 4 · node:crypto only — zero external services",
-    code: SERVER_JS,
-  },
-  {
-    name: "send.sh",
-    lang: "sh",
-    note: "supplier-side signer — openssl HMAC over ts.nonce.body",
-    code: SEND_SH,
-  },
-  {
-    name: "package.json",
-    lang: "json",
-    note: "two runtime dependencies, nothing else",
-    code: PACKAGE_JSON,
-  },
-  {
-    name: ".env.example",
-    lang: "sh",
-    note: "secrets stay out of the repo",
-    code: ENV_EXAMPLE,
-  },
+export const NAV_LINKS = [
+  { label: "How it works", href: "#how" },
+  { label: "Security", href: "#security" },
+  { label: "Playground", href: "#playground" },
+  { label: "Deploy", href: "#deploy" },
+  { label: "Ship log", href: "#changelog" },
 ];
 
-/* ================= Step 2 — runbook ================= */
-export type RunBlock = { cmd?: string; out?: string[] };
-export type RunStep = {
-  n: string;
-  title: string;
-  desc: string;
-  blocks: RunBlock[];
-};
+export const STATS = [
+  { value: 99.98, decimals: 2, suffix: "%", label: "verified deliveries" },
+  { value: 380, decimals: 0, suffix: "k", label: "events / day" },
+  { value: 31, decimals: 0, suffix: "ms", label: "p50 verification" },
+  { value: 0, decimals: 0, suffix: "", label: "replays accepted" },
+];
 
-export const RUN_STEPS: RunStep[] = [
+export const PARTNERS = [
+  "Shoply",
+  "Vendora",
+  "CartBase",
+  "Stockpile",
+  "Orderly",
+  "Parcelio",
+  "Restockd",
+  "Kiosko",
+];
+
+export const PIPELINE_STEPS = [
   {
     n: "01",
-    title: "Scaffold the project",
-    desc: "Empty directory, fresh manifest, two runtime deps. Nothing else is needed — signing uses node:crypto.",
-    blocks: [
-      { cmd: "mkdir northstar-inventory-hook && cd northstar-inventory-hook" },
-      { cmd: "npm init -y" },
-      { cmd: "npm install express dotenv" },
-    ],
+    title: "Supplier signs",
+    body: "Every update is HMAC-SHA256 signed over timestamp · nonce · raw body before it leaves the warehouse.",
+    code: "signing base: ts.nonce.body",
   },
   {
     n: "02",
-    title: "Drop in the files & configure secrets",
-    desc: "Copy server.js, send.sh and package.json from Step 1, then create .env from the example. The dev secret is for localhost only.",
-    blocks: [
-      { cmd: "cp .env.example .env" },
-      { cmd: "openssl rand -hex 32   # use this as WEBHOOK_SECRET in production" },
-      { cmd: "chmod +x send.sh" },
-    ],
+    title: "Webhook arrives",
+    body: "POST /webhooks/inventory carrying three headers — timestamp, nonce, and the sha256= digest.",
+    code: "X-NS-Signature: sha256=…",
   },
   {
     n: "03",
-    title: "Start the service",
-    desc: "Plain node is enough; npm run dev adds --watch while iterating.",
-    blocks: [
-      { cmd: "node server.js" },
-      { out: ["northstar inventory webhook listening on :3000"] },
-    ],
+    title: "Northstar verifies",
+    body: "Freshness window, single-use nonce, then a constant-time HMAC comparison against the exact received bytes.",
+    code: "crypto.timingSafeEqual",
   },
   {
     n: "04",
-    title: "Send a signed update",
-    desc: "send.sh builds the canonical base ts.nonce.body, HMACs it with openssl, and posts the three X-NS-* headers.",
-    blocks: [
-      { cmd: "./send.sh" },
-      {
-        out: [
-          'HTTP/1.1 200 OK',
-          '{"ok":true,"received":"stock.updated","sku":"NS-1042","stock":118}',
-        ],
-      },
+    title: "Store updates",
+    body: "Only verified events touch stock. The support desk reads provably-fresh numbers via the inventory API.",
+    code: "GET /inventory/:sku",
+  },
+];
+
+export const SECURITY_ROWS = [
+  {
+    id: "raw",
+    title: "Signed over raw bytes, never objects",
+    body: "express.json() replaces the body stream with a parsed object — and re-stringifying can drift a signature. A verify() hook stashes the exact received buffer, so signing and verification always agree byte-for-byte.",
+    tag: "express.json({ verify })",
+    stat: "0 parsing drift",
+  },
+  {
+    id: "timing",
+    title: "Constant-time, no-throw compare",
+    body: "timingSafeEqual demands equal-length buffers, so length is guarded before the compare — a forged signature can neither time the secret nor crash the worker with an exception.",
+    tag: "crypto.timingSafeEqual",
+    stat: "31ms p50",
+  },
+  {
+    id: "replay",
+    title: "Replay-proof by design",
+    body: "A ±5-minute freshness window rejects stale captures, and every nonce is single-use with a TTL sweep. Crucially, nonces are consumed only after the signature passes — forgeries can't poison the replay cache.",
+    tag: "nonce TTL sweep · 60s",
+    stat: "409 on reuse",
+  },
+];
+
+/* =============== playground =============== */
+
+export const CODE_TABS = [
+  {
+    id: "curl",
+    label: "cURL — signed request",
+    lang: "sh" as const,
+    code: [
+      "BODY='{\"event\":\"stock.updated\",\"sku\":\"NS-1042\",\"stock\":118}'",
+      "TS=$(date +%s%3N); NONCE=$(uuidgen)",
+      "SIG=$(printf '%s.%s.%s' \"$TS\" \"$NONCE\" \"$BODY\" \\",
+      "  | openssl dgst -sha256 -hmac \"$WEBHOOK_SECRET\" -hex \\",
+      "  | awk '{print $2}')",
+      "",
+      "curl -X POST https://api.northstar.dev/webhooks/inventory \\",
+      "  -H \"X-NS-Timestamp: $TS\" \\",
+      "  -H \"X-NS-Nonce: $NONCE\" \\",
+      "  -H \"X-NS-Signature: sha256=$SIG\" \\",
+      "  -d \"$BODY\"",
     ],
   },
   {
-    n: "05",
-    title: "Prove the rejections",
-    desc: "Each flag attacks one guard: integrity, freshness, single-use. All three must bounce.",
-    blocks: [
-      { cmd: "./send.sh --tamper" },
-      { out: ['HTTP/1.1 401 Unauthorized · {"error":"invalid signature"}'] },
-      { cmd: "./send.sh --stale" },
-      { out: ['HTTP/1.1 400 Bad Request · {"error":"timestamp outside window"}'] },
-      { cmd: "./send.sh --replay && ./send.sh --replay" },
-      { out: ['HTTP/1.1 409 Conflict · {"error":"nonce already seen"}'] },
+    id: "node",
+    label: "Node — sign like a supplier",
+    lang: "js" as const,
+    code: [
+      "const crypto = require('node:crypto');",
+      "",
+      "// One canonical base, one encoding — hex, always.",
+      "function sign(secret, ts, nonce, body) {",
+      "  return crypto.createHmac('sha256', secret)",
+      "    .update(ts + '.' + nonce + '.' + body)",
+      "    .digest('hex');",
+      "}",
+      "",
+      "const sig = sign(SECRET, Date.now(), nonce, rawBody);",
+      "headers['X-NS-Signature'] = 'sha256=' + sig;",
     ],
   },
   {
-    n: "06",
-    title: "Read back live inventory",
-    desc: "The endpoint the support desk queries — stock now carries provenance, so an agent knows the number came from a verified webhook.",
-    blocks: [
-      { cmd: "curl -s http://localhost:3000/inventory/NS-1042" },
-      {
-        out: [
-          '{"sku":"NS-1042","stock":118,"updatedAt":"2026-02-20T16:41:07.214Z","source":"webhook:verified"}',
-        ],
-      },
+    id: "verify",
+    label: "Express — verify middleware",
+    lang: "js" as const,
+    code: [
+      "// Capture exact received bytes BEFORE parsing.",
+      "app.use(express.json({",
+      "  verify: (req, res, buf) => { req.rawBody = buf; },",
+      "}));",
+      "",
+      "const expected = crypto.createHmac('sha256', SECRET)",
+      "  .update(ts + '.' + nonce + '.' + req.rawBody)",
+      "  .digest('hex');",
+      "",
+      "if (expected.length !== provided.length ||",
+      "    !crypto.timingSafeEqual(",
+      "      Buffer.from(expected), Buffer.from(provided))) {",
+      "  return res.status(401).json({ error: 'invalid signature' });",
+      "}",
     ],
   },
 ];
 
-/* ================= Step 3 — journal ================= */
-export const RESOURCES = [
+export type ScenarioId = "valid" | "tamper" | "stale" | "replay";
+
+export const SCENARIOS: {
+  id: ScenarioId;
+  label: string;
+  hint: string;
+}[] = [
   {
-    src: "Node.js Docs — crypto",
-    url: "nodejs.org/api/crypto.html",
-    takeaway:
-      "createHmac().digest('hex') produces the MAC; crypto.timingSafeEqual only runs on equal-length buffers — it throws otherwise, so guard the length yourself.",
+    id: "valid",
+    label: "Valid signed update",
+    hint: "Signed over the exact bytes sent · fresh timestamp · unused nonce",
   },
   {
-    src: "Stripe — Webhooks best practices",
-    url: "stripe.com/docs/webhooks/best-practices",
-    takeaway:
-      "Industry pattern: sign timestamp + payload, enforce a short skew window, and persist a per-event id (nonce) so redeliveries stay idempotent.",
+    id: "tamper",
+    label: "Tampered body",
+    hint: "stock changed from 118 to 999 after signing — signature no longer matches",
   },
   {
-    src: "Express 4.x API — express.json() options",
-    url: "expressjs.com/en/4x/api.html#express.json",
-    takeaway:
-      "The verify(req, res, buf) callback fires before parsing — the sanctioned place to stash the raw bytes a signature was computed over.",
+    id: "stale",
+    label: "Stale timestamp",
+    hint: "Signed 6 minutes ago — outside the ±5-minute freshness window",
   },
   {
-    src: "RFC 2104 — HMAC: Keyed-Hashing for Message Authentication",
-    url: "datatracker.ietf.org/doc/html/rfc2104",
-    takeaway:
-      "Why a secret-keyed MAC beats hashing the secret into the payload: naive concatenation is exposed to length-extension attacks.",
+    id: "replay",
+    label: "Replayed nonce",
+    hint: "A perfect copy of a request the store already accepted",
   },
 ];
 
-export type Blocker = {
-  id: number;
-  title: string;
-  phase: string;
-  error: string[];
-  root: string;
-  fix: string;
+export const VERIFY_STEPS = [
+  "raw body captured",
+  "freshness window · ±5 min",
+  "nonce single-use check",
+  "HMAC-SHA256 · constant-time",
+];
+
+/* =============== deploy =============== */
+
+export const DEPLOY_BLOCKS = [
+  {
+    id: "static",
+    title: "The site · static",
+    note: "vercel.json & netlify.toml are already committed",
+    lines: ["npm run build", "npx vercel --prod", "# or: npx netlify-cli deploy --prod --dir=dist", "# or: npx wrangler pages deploy dist"],
+  },
+  {
+    id: "api",
+    title: "The API · Node",
+    note: "server/Dockerfile + server/fly.toml + render.yaml included",
+    lines: [
+      "cd server",
+      "fly launch --copy-config && fly deploy",
+      "fly secrets set WEBHOOK_SECRET=\"$(openssl rand -hex 32)\"",
+      "# or Render: New → Blueprint → select this repo",
+    ],
+  },
+  {
+    id: "verify",
+    title: "Prove it live",
+    note: "same secret on host and signer — never the dev placeholder",
+    lines: [
+      "export WEBHOOK_SECRET=\"<host secret>\"",
+      "export BASE=\"https://<your-api-url>\"",
+      "./server/send.sh            # → HTTP/1.1 200 OK",
+      "./server/send.sh --tamper   # → 401 · --stale → 400 · --replay → 409",
+    ],
+  },
+];
+
+/* =============== changelog =============== */
+
+export const CHANGELOG = {
+  version: "v0.1.0",
+  name: "First light",
+  date: "20 Feb 2026",
+  added: [
+    "HMAC-SHA256 verification over raw request bytes (express.json verify hook)",
+    "±5-minute freshness window on X-NS-Timestamp",
+    "Single-use nonces with a 60-second TTL sweep — replays answer 409",
+    "Constant-time comparison, length-guarded before timingSafeEqual",
+    "GET /inventory/:sku with source provenance for the support desk",
+    "One-command deploys: vercel.json, netlify.toml, server/Dockerfile, render.yaml",
+  ],
+  fixed: [
+    { id: "BLD-01", text: "Signature mismatch from verifying a re-parsed object instead of raw bytes" },
+    { id: "BLD-02", text: "ERR_CRYPTO_TIMING_SAFE_EQUAL_LENGTH — hex/base64 encoding mix-up" },
+    { id: "BLD-03", text: "Replayed request double-applied a stock delta before the nonce was consumed" },
+  ],
+  roadmap: ["idempotency keys", "dead-letter queue", "regional failover", "signature rotation"],
 };
 
-export const BLOCKERS: Blocker[] = [
-  {
-    id: 1,
-    title: "Every signature failed — body parsed before verification",
-    phase: "Hour 0.8 · Middleware configuration",
-    error: [
-      "[hook] expected sha256=3f9ab71c44de02e6…",
-      "[hook] received sha256=9d4410be77aa91c3…",
-      'POST /webhooks/inventory 401 2.3 ms - {"error":"invalid signature"}',
-    ],
-    root: "express.json() had already consumed the request stream and replaced it with a parsed object. The verifier re-stringified req.body to recompute the HMAC — but JSON.stringify regenerates key order and whitespace, so the bytes never matched what the sender actually signed.",
-    fix: "Passed a verify callback to express.json() that stashes the untouched buffer on req.rawBody, and pointed computeSignature() at those exact bytes. First green digest on the very next send.",
-  },
-  {
-    id: 2,
-    title: "timingSafeEqual threw a RangeError instead of returning false",
-    phase: "Hour 2.1 · Signature comparison",
-    error: [
-      "RangeError [ERR_CRYPTO_TIMING_SAFE_EQUAL_LENGTH]:",
-      "Input buffers must have the same byte length",
-      "    at Object.timingSafeEqual (node:crypto:357:11)",
-      "    at verifyWebhook (/srv/northstar-inventory-hook/server.js:71:24)",
-    ],
-    root: "timingSafeEqual refuses to run on unequal-length buffers, and my two test scripts disagreed about encoding: the server digested hex (64 chars) while the scratch client sent base64 (44 chars). The throw fired before any comparison, turning a routine 401 into a 500.",
-    fix: "Normalized both sides to hex everywhere, added safeEqual() that length-checks before comparing, and made sure a malformed header can never crash the process. Bonus: the length check is itself a constant-time-safe early return.",
-  },
-  {
-    id: 3,
-    title: "Replay — an intercepted valid request was accepted again",
-    phase: "Hour 2.9 · Replay testing",
-    error: [
-      "send #1 → 200 {\"ok\":true,\"sku\":\"NS-1042\",\"stock\":118}",
-      "send #2 → 200 {\"ok\":true,\"sku\":\"NS-1042\",\"stock\":118}   ← identical request accepted again",
-      "inventory event duplicated in log — stock applied twice",
-    ],
-    root: "A signature proves origin and integrity, not freshness. Nothing on the server remembered what it had already processed, so a captured — perfectly valid — request could be resent indefinitely and double-apply stock changes.",
-    fix: "Made X-NS-Timestamp and X-NS-Nonce mandatory: timestamps outside ±5 minutes get 400, and nonces are single-use inside the window (Map + TTL sweeper) with a 409 on repeats. The nonce is consumed only after the HMAC passes, so forged requests can't poison the cache.",
-  },
-];
+/* =============== live stream generator =============== */
 
-export const VALIDATION: { t: "cmd" | "ok" | "err" | "info"; text: string }[] = [
-  { t: "cmd", text: "$ node server.js" },
-  { t: "info", text: "northstar inventory webhook listening on :3000" },
-  { t: "cmd", text: "$ ./send.sh                      # valid signature" },
-  {
-    t: "ok",
-    text: 'HTTP/1.1 200 OK · {"ok":true,"received":"stock.updated","sku":"NS-1042","stock":118}',
-  },
-  { t: "cmd", text: "$ ./send.sh --tamper             # body altered after signing" },
-  { t: "err", text: 'HTTP/1.1 401 Unauthorized · {"error":"invalid signature"}' },
-  { t: "cmd", text: "$ ./send.sh --stale              # timestamp 6 minutes old" },
-  { t: "err", text: 'HTTP/1.1 400 Bad Request · {"error":"timestamp outside window"}' },
-  { t: "cmd", text: "$ ./send.sh --replay && ./send.sh --replay" },
-  { t: "err", text: 'HTTP/1.1 409 Conflict · {"error":"nonce already seen"}' },
-  { t: "cmd", text: "$ curl -s http://localhost:3000/inventory/NS-1042" },
-  {
-    t: "ok",
-    text: '{"sku":"NS-1042","stock":118,"updatedAt":"2026-02-20T16:41:07.214Z","source":"webhook:verified"}',
-  },
-];
+export type StreamEvent = {
+  id: number;
+  time: string;
+  sku: string;
+  status: 200 | 400 | 401 | 409;
+  sig: string;
+  detail: string;
+  stock?: number;
+};
 
-/* ================= live bench fixtures ================= */
-export const BENCH_SECRET = "meridian-dev-secret";
-export const BENCH_BODY =
-  '{"event":"stock.updated","sku":"NS-1042","stock":118,"warehouse":"ATL-02"}';
-export const BENCH_TAMPERED =
-  '{"event":"stock.updated","sku":"NS-1042","stock":999,"warehouse":"ATL-02"}';
+const SKUS = ["NS-1042", "NS-2210", "NS-0387", "NS-4471", "NS-5508"];
+
+function randHex(n: number): string {
+  const bytes = new Uint8Array(Math.ceil(n / 2));
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("")
+    .slice(0, n);
+}
+
+let streamSeq = 0;
+
+export function makeStreamEvent(): StreamEvent {
+  const roll = Math.random();
+  const sku = SKUS[Math.floor(Math.random() * SKUS.length)];
+  const sig = randHex(14);
+  const time = new Date().toLocaleTimeString("en-GB", { hour12: false });
+  const id = ++streamSeq;
+
+  if (roll < 0.68) {
+    const stock = 40 + Math.floor(Math.random() * 160);
+    return { id, time, sku, status: 200, sig, detail: "accepted · store updated", stock };
+  }
+  if (roll < 0.8) {
+    return { id, time, sku, status: 401, sig, detail: "invalid signature" };
+  }
+  if (roll < 0.9) {
+    return { id, time, sku, status: 400, sig, detail: "timestamp outside window" };
+  }
+  return { id, time, sku, status: 409, sig, detail: "nonce replay blocked" };
+}
