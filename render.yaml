@@ -1,0 +1,30 @@
+# Render blueprint — creates both services from this repo.
+# Dashboard: New Blueprint Instance → select this repository.
+services:
+  # The portfolio/journal SPA (this site)
+  - type: web
+    name: meridian-assignment-1
+    runtime: static
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+
+  # The verified-webhook prototype
+  - type: web
+    name: ns-inventory-hook
+    runtime: node
+    rootDir: server
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /inventory/NS-1042
+    envVars:
+      - key: WEBHOOK_SECRET
+        generateValue: true        # Render creates a random secret — never type one here
+      - key: PORT
+        value: "3000"
