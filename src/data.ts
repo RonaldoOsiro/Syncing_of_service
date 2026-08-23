@@ -1,276 +1,350 @@
-/* =============== Northstar Sync — site content =============== */
+/* =============== sprint meta =============== */
+export const SPRINT = {
+  client: "Solstice Events Co.",
+  service: "Event Check-In Kiosk Service",
+  sprint: "Mid-sprint pivot · Day 4 of 7",
+  pivotId: "PIVOT-07",
+  vendor: "BadgeWorks Vendor API",
+  notice:
+    "DEPRECATION NOTICE — the synchronous print-confirmation endpoint (POST /v1/print, blocking) is end-of-life in 72 hours. All integrations must move to the async job model: publish print jobs to the badge-print queue and receive completion via signed webhooks. The blocking API will return 410 Gone after the window.",
+  phase: "REFACTOR_AUDIT",
+  deadline: "Hard deadline: ship before doors open Saturday 09:00. No extensions, no scope negotiation.",
+};
 
 export const NAV_LINKS = [
-  { label: "How it works", href: "#how" },
-  { label: "Security", href: "#security" },
-  { label: "Playground", href: "#playground" },
-  { label: "Deploy", href: "#deploy" },
-  { label: "Ship log", href: "#changelog" },
+  { href: "#floor", label: "Kiosk floor" },
+  { href: "#harness", label: "Test harness" },
+  { href: "#verdict", label: "Verdict" },
+  { href: "#delta", label: "Scope delta" },
+  { href: "#code", label: "Refactor" },
+  { href: "#index", label: "Adaptability" },
+  { href: "#trail", label: "Audit trail" },
 ];
 
-export const STATS = [
-  { value: 99.98, decimals: 2, suffix: "%", label: "verified deliveries" },
-  { value: 380, decimals: 0, suffix: "k", label: "events / day" },
-  { value: 31, decimals: 0, suffix: "ms", label: "p50 verification" },
-  { value: 0, decimals: 0, suffix: "", label: "replays accepted" },
-];
+/* =============== attendees =============== */
+export type SeedAttendee = {
+  id: string;
+  name: string;
+  ticket: string;
+  tier: string;
+  state: "NOT_CHECKED_IN" | "PENDING_PRINT" | "CHECKED_IN";
+  note: string;
+  checkedInAt?: string;
+};
 
-export const PARTNERS = [
-  "Shoply",
-  "Vendora",
-  "CartBase",
-  "Stockpile",
-  "Orderly",
-  "Parcelio",
-  "Restockd",
-  "Kiosko",
-];
-
-export const PIPELINE_STEPS = [
+export const ATTENDEES: SeedAttendee[] = [
   {
-    n: "01",
-    title: "Supplier signs",
-    body: "Every update is HMAC-SHA256 signed over timestamp · nonce · raw body before it leaves the warehouse.",
-    code: "signing base: ts.nonce.body",
+    id: "att-01",
+    name: "Mara Voss",
+    ticket: "GA-1042",
+    tier: "General Admission",
+    state: "NOT_CHECKED_IN",
+    note: "Happy path — scenarios S1–S3",
   },
   {
-    n: "02",
-    title: "Webhook arrives",
-    body: "POST /webhooks/inventory carrying three headers — timestamp, nonce, and the sha256= digest.",
-    code: "X-NS-Signature: sha256=…",
+    id: "att-02",
+    name: "Idris Kane",
+    ticket: "VIP-2210",
+    tier: "VIP · backstage",
+    state: "NOT_CHECKED_IN",
+    note: "Forged-callback target — scenario S4a",
   },
   {
-    n: "03",
-    title: "Northstar verifies",
-    body: "Freshness window, single-use nonce, then a constant-time HMAC comparison against the exact received bytes.",
-    code: "crypto.timingSafeEqual",
-  },
-  {
-    n: "04",
-    title: "Store updates",
-    body: "Only verified events touch stock. The support desk reads provably-fresh numbers via the inventory API.",
-    code: "GET /inventory/:sku",
+    id: "att-03",
+    name: "Sana Ortiz",
+    ticket: "GA-3307",
+    tier: "General Admission",
+    state: "CHECKED_IN",
+    note: "Pre-seeded terminal state — duplicate-scan guard",
+    checkedInAt: "08:41:12",
   },
 ];
 
-export const SECURITY_ROWS = [
+/* =============== scenarios =============== */
+export type Scenario = {
+  id: "S1" | "S2" | "S3" | "S4";
+  title: string;
+  target: string;
+  expect: string;
+};
+
+export const SCENARIOS: Scenario[] = [
   {
-    id: "raw",
-    title: "Signed over raw bytes, never objects",
-    body: "express.json() replaces the body stream with a parsed object — and re-stringifying can drift a signature. A verify() hook stashes the exact received buffer, so signing and verification always agree byte-for-byte.",
-    tag: "express.json({ verify })",
-    stat: "0 parsing drift",
+    id: "S1",
+    title: "Valid scan",
+    target: "Mara Voss · GA-1042",
+    expect: "202 Accepted → PENDING_PRINT, job published to badge-print queue",
   },
   {
-    id: "timing",
-    title: "Constant-time, no-throw compare",
-    body: "timingSafeEqual demands equal-length buffers, so length is guarded before the compare — a forged signature can neither time the secret nor crash the worker with an exception.",
-    tag: "crypto.timingSafeEqual",
-    stat: "31ms p50",
+    id: "S2",
+    title: "Immediate rapid re-scan",
+    target: "Mara (PENDING_PRINT) + Sana (CHECKED_IN)",
+    expect: "409 duplicate_scan in BOTH non-initial states — guard holds async",
   },
   {
-    id: "replay",
-    title: "Replay-proof by design",
-    body: "A ±5-minute freshness window rejects stale captures, and every nonce is single-use with a TTL sweep. Crucially, nonces are consumed only after the signature passes — forgeries can't poison the replay cache.",
-    tag: "nonce TTL sweep · 60s",
-    stat: "409 on reuse",
+    id: "S3",
+    title: "Valid webhook signature",
+    target: "Vendor callback for Mara's job",
+    expect: "HMAC verified → 200 OK → state transitions to CHECKED_IN",
+  },
+  {
+    id: "S4",
+    title: "Forged signature + stale job",
+    target: "Tampered callback (Idris) + unknown jobId",
+    expect: "403 Forbidden on bad signature · 409 Conflict on stale job id",
   },
 ];
 
-/* =============== playground =============== */
-
-export const CODE_TABS = [
-  {
-    id: "curl",
-    label: "cURL — signed request",
-    lang: "sh" as const,
-    code: [
-      "BODY='{\"event\":\"stock.updated\",\"sku\":\"NS-1042\",\"stock\":118}'",
-      "TS=$(date +%s%3N); NONCE=$(uuidgen)",
-      "SIG=$(printf '%s.%s.%s' \"$TS\" \"$NONCE\" \"$BODY\" \\",
-      "  | openssl dgst -sha256 -hmac \"$WEBHOOK_SECRET\" -hex \\",
-      "  | awk '{print $2}')",
-      "",
-      "curl -X POST https://api.northstar.dev/webhooks/inventory \\",
-      "  -H \"X-NS-Timestamp: $TS\" \\",
-      "  -H \"X-NS-Nonce: $NONCE\" \\",
-      "  -H \"X-NS-Signature: sha256=$SIG\" \\",
-      "  -d \"$BODY\"",
-    ],
-  },
-  {
-    id: "node",
-    label: "Node — sign like a supplier",
-    lang: "js" as const,
-    code: [
-      "const crypto = require('node:crypto');",
-      "",
-      "// One canonical base, one encoding — hex, always.",
-      "function sign(secret, ts, nonce, body) {",
-      "  return crypto.createHmac('sha256', secret)",
-      "    .update(ts + '.' + nonce + '.' + body)",
-      "    .digest('hex');",
-      "}",
-      "",
-      "const sig = sign(SECRET, Date.now(), nonce, rawBody);",
-      "headers['X-NS-Signature'] = 'sha256=' + sig;",
-    ],
-  },
-  {
-    id: "verify",
-    label: "Express — verify middleware",
-    lang: "js" as const,
-    code: [
-      "// Capture exact received bytes BEFORE parsing.",
-      "app.use(express.json({",
-      "  verify: (req, res, buf) => { req.rawBody = buf; },",
-      "}));",
-      "",
-      "const expected = crypto.createHmac('sha256', SECRET)",
-      "  .update(ts + '.' + nonce + '.' + req.rawBody)",
-      "  .digest('hex');",
-      "",
-      "if (expected.length !== provided.length ||",
-      "    !crypto.timingSafeEqual(",
-      "      Buffer.from(expected), Buffer.from(provided))) {",
-      "  return res.status(401).json({ error: 'invalid signature' });",
-      "}",
-    ],
-  },
-];
-
-export type ScenarioId = "valid" | "tamper" | "stale" | "replay";
-
-export const SCENARIOS: {
-  id: ScenarioId;
-  label: string;
-  hint: string;
-}[] = [
-  {
-    id: "valid",
-    label: "Valid signed update",
-    hint: "Signed over the exact bytes sent · fresh timestamp · unused nonce",
-  },
-  {
-    id: "tamper",
-    label: "Tampered body",
-    hint: "stock changed from 118 to 999 after signing — signature no longer matches",
-  },
-  {
-    id: "stale",
-    label: "Stale timestamp",
-    hint: "Signed 6 minutes ago — outside the ±5-minute freshness window",
-  },
-  {
-    id: "replay",
-    label: "Replayed nonce",
-    hint: "A perfect copy of a request the store already accepted",
-  },
-];
-
-export const VERIFY_STEPS = [
-  "raw body captured",
-  "freshness window · ±5 min",
-  "nonce single-use check",
-  "HMAC-SHA256 · constant-time",
-];
-
-/* =============== deploy =============== */
-
-export const DEPLOY_BLOCKS = [
-  {
-    id: "static",
-    title: "The site · static",
-    note: "vercel.json & netlify.toml are already committed",
-    lines: ["npm run build", "npx vercel --prod", "# or: npx netlify-cli deploy --prod --dir=dist", "# or: npx wrangler pages deploy dist"],
-  },
-  {
-    id: "api",
-    title: "The API · Node",
-    note: "server/Dockerfile + server/fly.toml + render.yaml included",
-    lines: [
-      "cd server",
-      "fly launch --copy-config && fly deploy",
-      "fly secrets set WEBHOOK_SECRET=\"$(openssl rand -hex 32)\"",
-      "# or Render: New → Blueprint → select this repo",
-    ],
-  },
-  {
-    id: "verify",
-    title: "Prove it live",
-    note: "same secret on host and signer — never the dev placeholder",
-    lines: [
-      "export WEBHOOK_SECRET=\"<host secret>\"",
-      "export BASE=\"https://<your-api-url>\"",
-      "./server/send.sh            # → HTTP/1.1 200 OK",
-      "./server/send.sh --tamper   # → 401 · --stale → 400 · --replay → 409",
-    ],
-  },
-];
-
-/* =============== changelog =============== */
-
-export const CHANGELOG = {
-  version: "v0.1.0",
-  name: "First light",
-  date: "20 Feb 2026",
+/* =============== scope delta analysis =============== */
+export const DELTA = {
+  dropped: [
+    "Synchronous print call on QR scan — BadgePrinterClient.callSync()",
+    "Blocking UI: 'Checked In' shown only after vendor 200 returned inline",
+    "Legacy polling loop — GET /vendor/status every 2s until terminal",
+    "Inline retry/backoff on vendor timeout (superseded by queue redelivery)",
+  ],
+  modified: [
+    "POST /check-ins/:id/scan now answers 202 Accepted + jobId — kiosk never blocks",
+    "State machine gains PENDING_PRINT between NOT_CHECKED_IN and CHECKED_IN",
+    "Duplicate-scan guard extended to reject across PENDING_PRINT and CHECKED_IN",
+    "UI copy: badge reveals only after a verified webhook — never on scan alone",
+  ],
   added: [
-    "HMAC-SHA256 verification over raw request bytes (express.json verify hook)",
-    "±5-minute freshness window on X-NS-Timestamp",
-    "Single-use nonces with a 60-second TTL sweep — replays answer 409",
-    "Constant-time comparison, length-guarded before timingSafeEqual",
-    "GET /inventory/:sku with source provenance for the support desk",
-    "One-command deploys: vercel.json, netlify.toml, server/Dockerfile, render.yaml",
+    "QueuePublisher.publish(printJob) — badge-print queue with redelivery",
+    "POST /vendor/print-events — webhook receiver with HMAC-SHA256 verification",
+    "Freshness window + single-use jobId check on every callback (anti-replay)",
+    "Ops surface: job dashboard, callback inbox, and the TRAIL audit log",
   ],
-  fixed: [
-    { id: "BLD-01", text: "Signature mismatch from verifying a re-parsed object instead of raw bytes" },
-    { id: "BLD-02", text: "ERR_CRYPTO_TIMING_SAFE_EQUAL_LENGTH — hex/base64 encoding mix-up" },
-    { id: "BLD-03", text: "Replayed request double-applied a stock delta before the nonce was consumed" },
-  ],
-  roadmap: ["idempotency keys", "dead-letter queue", "regional failover", "signature rotation"],
 };
 
-/* =============== live stream generator =============== */
-
-export type StreamEvent = {
-  id: number;
-  time: string;
-  sku: string;
-  status: 200 | 400 | 401 | 409;
-  sig: string;
-  detail: string;
-  stock?: number;
+export type TradeOffRow = {
+  dimension: string;
+  before: string;
+  after: string;
+  decision: string;
 };
 
-const SKUS = ["NS-1042", "NS-2210", "NS-0387", "NS-4471", "NS-5508"];
+export const TRADE_OFFS: TradeOffRow[] = [
+  {
+    dimension: "Latency to 'Checked In'",
+    before: "600–900 ms vendor round-trip, blocking the lane",
+    after: "~1.5–2.5 s end-to-end (queue + print + callback)",
+    decision:
+      "Accept — perceived speed preserved: kiosk shows PENDING_PRINT instantly, line never stalls",
+  },
+  {
+    dimension: "Failure blast radius",
+    before: "Vendor outage freezes the entire check-in line",
+    after: "Queue buffers jobs; kiosk keeps scanning through outages",
+    decision: "Accept — doors-open resilience beats raw speed",
+  },
+  {
+    dimension: "Security surface",
+    before: "Internal call only — nothing public",
+    after: "Public webhook endpoint — spoofable by design",
+    decision:
+      "Mitigate — HMAC-SHA256 signature + freshness window + single-use job ids (proven by S4a/S4b)",
+  },
+  {
+    dimension: "Complexity",
+    before: "One call path to reason about",
+    after: "Three units: publisher, queue worker, webhook receiver",
+    decision:
+      "Accept — each unit independently testable; legacy sync path deleted outright (guardrail 1)",
+  },
+  {
+    dimension: "Consistency model",
+    before: "Strong — print confirmed before UI updates",
+    after: "Eventual — state converges when the callback lands",
+    decision:
+      "Mitigate — idempotent receiver; duplicate guard spans every non-initial state (guardrail 2)",
+  },
+];
 
-function randHex(n: number): string {
-  const bytes = new Uint8Array(Math.ceil(n / 2));
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("")
-    .slice(0, n);
-}
+/* =============== evaluation matrix (RANK) =============== */
+export type Dimension = {
+  id: "adaptation" | "integrity" | "delta";
+  name: string;
+  weight: number;
+  pass: string;
+  fail: string;
+  checks: string[];
+};
 
-let streamSeq = 0;
+export const DIMENSIONS: Dimension[] = [
+  {
+    id: "adaptation",
+    name: "Adaptation Completeness",
+    weight: 40,
+    pass: "Webhook endpoint and queue publisher operational; state machine includes PENDING_PRINT.",
+    fail: "Relies on synchronous print response or missing webhook logic.",
+    checks: [
+      "Job published to badge-print queue",
+      "Kiosk reached PENDING_PRINT",
+      "A signed webhook was verified end-to-end",
+    ],
+  },
+  {
+    id: "integrity",
+    name: "Architectural Integrity",
+    weight: 30,
+    pass: "Obsolete synchronous code completely removed; duplicate scans blocked in all non-initial states.",
+    fail: "Legacy synchronous code left running in parallel.",
+    checks: [
+      "Sync client + polling loop dropped (no legacy path live)",
+      "Duplicate scan rejected in PENDING_PRINT",
+      "Duplicate scan rejected in CHECKED_IN",
+    ],
+  },
+  {
+    id: "delta",
+    name: "Trade-Off & Scope Delta",
+    weight: 30,
+    pass: "Scope Delta Analysis documents dropped / modified / added tasks and latency-vs-security trade-offs.",
+    fail: "Delta undocumented or trade-offs unstated.",
+    checks: [
+      "Dropped / modified / added ledger published",
+      "Latency vs. security matrix recorded with decisions",
+    ],
+  },
+];
 
-export function makeStreamEvent(): StreamEvent {
-  const roll = Math.random();
-  const sku = SKUS[Math.floor(Math.random() * SKUS.length)];
-  const sig = randHex(14);
-  const time = new Date().toLocaleTimeString("en-GB", { hour12: false });
-  const id = ++streamSeq;
+/* =============== adaptability index template =============== */
+export const ADAPTABILITY = {
+  ratings: [
+    { axis: "Speed of adaptation", prompt: "Notice received → refactored build green, in hours" },
+    { axis: "Quality under pressure", prompt: "Regressions introduced by the pivot (target: 0)" },
+    { axis: "Scope discipline", prompt: "Unrequested work resisted; delta ledger stays honest" },
+    { axis: "Communication", prompt: "Deprecation notice surfaced + trade-offs narrated before asked" },
+  ],
+  guardrails: [
+    "Obsolete sync code fully removed — nothing runs side-by-side",
+    "Duplicate-scan protection holds across PENDING_PRINT and CHECKED_IN",
+    "Webhook payload signatures verified (HMAC-SHA256)",
+    "Deadline held — no extension requested",
+  ],
+  formula:
+    "INDEX = (0.4 × Adaptation Completeness + 0.3 × Architectural Integrity + 0.3 × Scope Delta) × guardrail multiplier — multiplier is 0.9 per violated guardrail, 1.0 when all four hold",
+};
 
-  if (roll < 0.68) {
-    const stock = 40 + Math.floor(Math.random() * 160);
-    return { id, time, sku, status: 200, sig, detail: "accepted · store updated", stock };
+/* =============== refactor code views =============== */
+export const LEGACY_CODE = `// ============================================================
+// REMOVED — vendor deprecated the synchronous print API (410 Gone)
+// Guardrail 1: no legacy path may run side-by-side. Deleted outright.
+// ============================================================
+app.post('/check-ins/:id/scan', async (req, res) => {
+  const att = attendees.get(req.params.id);
+  if (att.state !== 'NOT_CHECKED_IN') return res.status(409).json({ error: 'duplicate' });
+
+  // BLOCKING — the whole kiosk lane waited on the vendor round-trip
+  const result = await BadgePrinterClient.callSync({
+    attendeeId: att.id,
+    layout: att.tier === 'VIP' ? 'backstage' : 'standard',
+  });
+
+  if (!result.printed) return res.status(502).json({ error: 'printer failed' });
+  att.state = 'CHECKED_IN';          // trusted a sync 200 with no signature
+  res.json({ state: 'CHECKED_IN' });
+});
+
+// Legacy polling loop — also deleted
+setInterval(() => pollVendorStatus(), 2000);`;
+
+export const REFACTORED_CODE = `// ============================================================
+// ASYNC FLOW — publish to queue, trust only signed callbacks
+// ============================================================
+app.post('/check-ins/:id/scan', (req, res) => {
+  const att = attendees.get(req.params.id);
+
+  // Guardrail 2 — duplicates blocked in EVERY non-initial state
+  if (att.state === 'PENDING_PRINT' || att.state === 'CHECKED_IN') {
+    return res.status(409).json({ error: 'duplicate_scan', state: att.state });
   }
-  if (roll < 0.8) {
-    return { id, time, sku, status: 401, sig, detail: "invalid signature" };
+
+  att.state = 'PENDING_PRINT';
+  const job = { jobId: uid(), attendeeId: att.id, ts: Date.now() };
+  QueuePublisher.publish('badge-print', job);     // fire-and-forget
+  res.status(202).json({ state: att.state, jobId: job.jobId });
+});
+
+// Vendor calls back here when the badge is physically printed.
+app.post('/vendor/print-events', express.json({
+  verify: (req, _res, buf) => { req.rawBody = buf; },
+}), (req, res) => {
+  const sig = (req.header('X-Solstice-Signature') || '').replace('sha256=', '');
+
+  // Guardrail 3 — HMAC-SHA256 over the raw bytes, constant-time compare
+  const expected = hmac('sha256', VENDOR_SECRET).update(req.rawBody).digest('hex');
+  if (!safeEqual(expected, sig)) return res.status(403).json({ error: 'bad_signature' });
+
+  const { jobId, status } = req.body;
+  const job = jobs.get(jobId);
+  if (!job || job.done) return res.status(409).json({ error: 'stale_or_unknown_job' });
+
+  job.done = true;                                 // consume BEFORE mutating
+  if (status === 'printed') {
+    const att = attendees.get(job.attendeeId);
+    if (att.state === 'PENDING_PRINT') att.state = 'CHECKED_IN';
   }
-  if (roll < 0.9) {
-    return { id, time, sku, status: 400, sig, detail: "timestamp outside window" };
-  }
-  return { id, time, sku, status: 409, sig, detail: "nonce replay blocked" };
-}
+  res.status(200).json({ ok: true });
+});`;
+
+export const VENDOR_SECRET = "solstice-vendor-hmac-secret";
+
+/* =============== seed trail =============== */
+export const SEED_TRAIL = [
+  {
+    timestamp: "2026-02-17T09:04:11Z",
+    sprint_phase: "ORIGINAL_BUILD",
+    component_changed: "BadgePrinterClient.callSync()",
+    action_taken: "ADDED",
+    security_status: "UNVERIFIED",
+    audit_note:
+      "Baseline sync print flow built for 3 test attendees (incl. 1 duplicate-scan case). Kiosk blocks on vendor 200 before showing CHECKED_IN.",
+  },
+  {
+    timestamp: "2026-02-17T09:31:47Z",
+    sprint_phase: "ORIGINAL_BUILD",
+    component_changed: "GET /vendor/status (polling)",
+    action_taken: "ADDED",
+    security_status: "UNVERIFIED",
+    audit_note:
+      "2-second polling loop added to reconcile print status. Flagged for review — chattiest component in the build.",
+  },
+  {
+    timestamp: "2026-02-18T14:02:09Z",
+    sprint_phase: "PIVOT_INJECTED",
+    component_changed: "BadgeWorks vendor API",
+    action_taken: "MODIFIED",
+    security_status: "UNVERIFIED",
+    audit_note:
+      "Deprecation notice received: POST /v1/print goes 410 Gone in 72h. Directive: queue-publish + signed webhook receiver. Sync path must not ship.",
+  },
+  {
+    timestamp: "2026-02-18T15:47:33Z",
+    sprint_phase: "REFACTOR_AUDIT",
+    component_changed: "BadgePrinterClient.callSync() + polling loop",
+    action_taken: "DROPPED",
+    security_status: "UNVERIFIED",
+    audit_note:
+      "Sync client, inline retry and the 2s polling loop deleted from the build. No legacy path remains executable — guardrail 1 satisfied.",
+  },
+  {
+    timestamp: "2026-02-18T16:12:58Z",
+    sprint_phase: "REFACTOR_AUDIT",
+    component_changed: "QueuePublisher.publish('badge-print')",
+    action_taken: "ADDED",
+    security_status: "UNVERIFIED",
+    audit_note:
+      "Scan endpoint now answers 202 Accepted with a jobId and publishes to the badge-print queue. Kiosk transitions to PENDING_PRINT immediately.",
+  },
+  {
+    timestamp: "2026-02-18T16:40:21Z",
+    sprint_phase: "REFACTOR_AUDIT",
+    component_changed: "POST /vendor/print-events",
+    action_taken: "ADDED",
+    security_status: "VERIFIED_HMAC",
+    audit_note:
+      "Webhook receiver live: HMAC-SHA256 over raw bytes, constant-time compare, freshness window, single-use jobIds. CHECKED_IN set only on a verified callback.",
+  },
+];
